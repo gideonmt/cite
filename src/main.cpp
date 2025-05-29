@@ -1,3 +1,4 @@
+#include "add.hpp"
 #include "export.hpp"
 #include <iostream>
 #include <string>
@@ -17,8 +18,7 @@ int main(int argc, char *argv[]) {
       return 1;
     }
     std::string filename = argv[2];
-    std::cout << "TODO" << std::endl;
-    return 0;
+    return cite_add(filename);
   } else if (command == "export") {
 
     if (argc < 4) {
