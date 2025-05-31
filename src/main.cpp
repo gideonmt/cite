@@ -18,9 +18,8 @@ int main(int argc, char *argv[]) {
       return 1;
     }
     std::string filename = argv[2];
-    return cite_add(filename);
+    return add_entry(filename);
   } else if (command == "export") {
-
     if (argc < 4) {
       std::cerr
           << "Usage: cite export <file.json> <style> [output.html|output.md]\n";
