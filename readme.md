@@ -51,13 +51,6 @@ See [SCHEMA.md](SCHEMA.md) for details and a full example.
   - Long footnotes and short footnotes  
   - Footnotes include `[pg]` as a placeholder for page number
 
-## TODO
-
-- [ ] Add an interactive tool to add new entries to your JSON file (or create one). Should prompt for type of source, then relevant fields (title, authors, etc.) and output valid JSON.
-- [ ] Add MLA format
-- [ ] Add IEEE format
-- [ ] Add APA format
-
 ---
 
 MIT License. See [LICENSE](LICENSE).
