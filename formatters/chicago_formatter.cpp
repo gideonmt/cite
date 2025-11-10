@@ -1,189 +1,386 @@
 #include "chicago_formatter.hpp"
 #include <algorithm>
+#include <cctype>
 #include <sstream>
 #include <vector>
 
-// Helper: Italicize in HTML
 static std::string html_italic(const std::string &s) {
   return "<i>" + s + "</i>";
 }
 
-// Helper: Get string from JSON object, or empty string
 static std::string get_str(const nlohmann::json &obj, const std::string &key) {
   if (obj.contains(key) && obj[key].is_string())
     return obj[key];
   return "";
 }
 
-// Helper: Join author/editor names, handling BibJSON object or string
-static std::string join_names(const nlohmann::json &people) {
-  if (!people.is_array())
-    return "";
-  std::vector<std::string> names;
-  for (const auto &p : people) {
-    if (p.is_object() && p.contains("name"))
-      names.push_back((std::string)p["name"]);
-    else if (p.is_string())
-      names.push_back((std::string)p);
+static std::string title_case(const std::string &s) {
+  std::string result = s;
+  bool new_word = true;
+  for (char &c : result) {
+    if (std::isspace(c) || c == '-') {
+      new_word = true;
+    } else if (new_word) {
+      c = std::toupper(c);
+      new_word = false;
+    }
   }
-  if (names.empty())
-    return "";
-  // For 2+ authors: "Last, First, and Last, First"
-  if (names.size() == 1)
-    return names[0];
-  if (names.size() == 2)
-    return names[0] + " and " + names[1];
-  std::string joined;
-  for (size_t i = 0; i < names.size(); ++i) {
-    if (i == names.size() - 1)
-      joined += "and " + names[i];
-    else
-      joined += names[i] + ", ";
-  }
-  return joined;
+  return result;
 }
 
-// Helper: Get last name of first author/editor for sorting
-std::string
-ChicagoFormatter::get_author_last_name(const nlohmann::json &entry) {
-  if (!entry.contains("author") || !entry["author"].is_array() ||
-      entry["author"].empty())
-    return "Unknown";
-  auto first = entry["author"][0];
-  if (first.is_object()) {
-    if (first.contains("lastname"))
-      return (std::string)first["lastname"];
-    if (first.contains("name")) {
-      std::string name = first["name"];
-      auto comma = name.find(',');
-      if (comma != std::string::npos)
-        return name.substr(0, comma);
-      auto space = name.find(' ');
-      return (space != std::string::npos) ? name.substr(0, space) : name;
+struct ParsedName {
+  std::string first;
+  std::string last;
+  std::string full;
+};
+
+static ParsedName parse_name(const nlohmann::json &person) {
+  ParsedName pn;
+  
+  if (person.is_object()) {
+    // Try structured fields first
+    if (person.contains("firstname") && person.contains("lastname")) {
+      pn.first = person["firstname"].get<std::string>();
+      pn.last = person["lastname"].get<std::string>();
+      pn.full = pn.last + ", " + pn.first;
+    } else if (person.contains("given") && person.contains("family")) {
+      // CrossRef format
+      pn.first = person["given"].get<std::string>();
+      pn.last = person["family"].get<std::string>();
+      pn.full = pn.last + ", " + pn.first;
+    } else if (person.contains("name")) {
+      pn.full = person["name"].get<std::string>();
+      // Try to parse "Last, First" format
+      auto comma = pn.full.find(',');
+      if (comma != std::string::npos) {
+        pn.last = pn.full.substr(0, comma);
+        pn.first = pn.full.substr(comma + 1);
+        // Trim whitespace
+        while (!pn.first.empty() && std::isspace(pn.first[0]))
+          pn.first.erase(0, 1);
+      } else {
+        // Try "First Last" format
+        auto space = pn.full.rfind(' ');
+        if (space != std::string::npos) {
+          pn.first = pn.full.substr(0, space);
+          pn.last = pn.full.substr(space + 1);
+        } else {
+          pn.last = pn.full;
+        }
+      }
     }
-  } else if (first.is_string()) {
-    std::string name = first;
-    auto comma = name.find(',');
-    if (comma != std::string::npos)
-      return name.substr(0, comma);
-    auto space = name.find(' ');
-    return (space != std::string::npos) ? name.substr(0, space) : name;
+  } else if (person.is_string()) {
+    pn.full = person.get<std::string>();
+    auto comma = pn.full.find(',');
+    if (comma != std::string::npos) {
+      pn.last = pn.full.substr(0, comma);
+      pn.first = pn.full.substr(comma + 1);
+      while (!pn.first.empty() && std::isspace(pn.first[0]))
+        pn.first.erase(0, 1);
+    } else {
+      auto space = pn.full.rfind(' ');
+      if (space != std::string::npos) {
+        pn.first = pn.full.substr(0, space);
+        pn.last = pn.full.substr(space + 1);
+      } else {
+        pn.last = pn.full;
+      }
+    }
+  }
+  
+  return pn;
+}
+
+static std::string join_names_biblio(const nlohmann::json &people) {
+  if (!people.is_array() || people.empty())
+    return "";
+  
+  std::vector<ParsedName> names;
+  for (const auto &p : people) {
+    names.push_back(parse_name(p));
+  }
+  
+  if (names.empty())
+    return "";
+  
+  std::ostringstream oss;
+  oss << names[0].last;
+  if (!names[0].first.empty())
+    oss << ", " << names[0].first;
+  
+  if (names.size() == 2) {
+    oss << ", and " << names[1].first;
+    if (!names[1].first.empty())
+      oss << " ";
+    oss << names[1].last;
+  } else if (names.size() > 2) {
+    for (size_t i = 1; i < names.size(); ++i) {
+      oss << ", ";
+      if (i == names.size() - 1)
+        oss << "and ";
+      oss << names[i].first;
+      if (!names[i].first.empty())
+        oss << " ";
+      oss << names[i].last;
+    }
+  }
+  
+  return oss.str();
+}
+
+static std::string join_names_footnote(const nlohmann::json &people) {
+  if (!people.is_array() || people.empty())
+    return "";
+  
+  std::vector<ParsedName> names;
+  for (const auto &p : people) {
+    names.push_back(parse_name(p));
+  }
+  
+  if (names.empty())
+    return "";
+  
+  std::ostringstream oss;
+  for (size_t i = 0; i < names.size(); ++i) {
+    if (i > 0) {
+      if (i == names.size() - 1)
+        oss << ", and ";
+      else
+        oss << ", ";
+    }
+    oss << names[i].first;
+    if (!names[i].first.empty())
+      oss << " ";
+    oss << names[i].last;
+  }
+  
+  return oss.str();
+}
+
+std::string ChicagoFormatter::get_author_last_name(const nlohmann::json &entry) {
+  if (entry.contains("author") && entry["author"].is_array() && 
+      !entry["author"].empty()) {
+    ParsedName pn = parse_name(entry["author"][0]);
+    return pn.last.empty() ? "Unknown" : pn.last;
+  }
+  if (entry.contains("editor") && entry["editor"].is_array() && 
+      !entry["editor"].empty()) {
+    ParsedName pn = parse_name(entry["editor"][0]);
+    return pn.last.empty() ? "Unknown" : pn.last;
   }
   return "Unknown";
 }
 
 std::string ChicagoFormatter::format(const nlohmann::json &entry) const {
-  // Chicago bibliography: Last, First, Title. Journal (Year).
   std::ostringstream oss;
-  // Author(s)
-  oss << join_names(entry.value("author", nlohmann::json::array()));
-  // Title
+  
+  bool has_author = entry.contains("author") && entry["author"].is_array() && 
+                    !entry["author"].empty();
+  bool has_editor = entry.contains("editor") && entry["editor"].is_array() && 
+                    !entry["editor"].empty();
+  
+  if (has_author) {
+    oss << join_names_biblio(entry["author"]);
+  } else if (has_editor) {
+    oss << join_names_biblio(entry["editor"]);
+    oss << (entry["editor"].size() > 1 ? ", eds" : ", ed");
+  } else {
+    oss << "Unknown Author";
+  }
+  
+  oss << ". ";
+  
+  // Title (italicized for books, quoted for articles)
   std::string title = entry.value("title", "Untitled");
-  oss << ". " << html_italic(title);
-  // Journal/Book/etc.
+  std::string type = entry.value("type", "");
+  
+  if (type == "article" || type == "paper") {
+    oss << "\"" << title << ".\"";
+  } else {
+    oss << html_italic(title) << ".";
+  }
+  
+  // Container (journal, book, etc.)
   if (entry.contains("journal") && entry["journal"].is_object()) {
-    std::string journal = get_str(entry["journal"], "name");
-    if (!journal.empty())
-      oss << ". " << journal;
+    oss << " ";
+    std::string journal_name = get_str(entry["journal"], "name");
+    if (!journal_name.empty())
+      oss << html_italic(journal_name);
+    
     std::string volume = get_str(entry["journal"], "volume");
-    if (!volume.empty())
+    std::string issue = get_str(entry["journal"], "number");
+    
+    if (!volume.empty()) {
       oss << " " << volume;
+      if (!issue.empty())
+        oss << ", no. " << issue;
+    }
+    
+    // Year in parentheses for journal articles
+    std::string year = entry.value("year", "");
+    if (!year.empty())
+      oss << " (" << year << ")";
+    
     std::string pages = get_str(entry["journal"], "pages");
     if (!pages.empty())
-      oss << ", " << pages;
+      oss << ": " << pages;
+    
+    oss << ".";
   } else if (entry.contains("publisher")) {
-    oss << ". " << get_str(entry, "publisher");
+    // Book format
+    std::string place = entry.value("place", "");
+    std::string publisher = get_str(entry, "publisher");
+    std::string year = entry.value("year", "");
+    
+    if (!place.empty() || !publisher.empty()) {
+      oss << " ";
+      if (!place.empty())
+        oss << place << ": ";
+      if (!publisher.empty())
+        oss << publisher;
+      if (!year.empty())
+        oss << ", " << year;
+      oss << ".";
+    } else if (!year.empty()) {
+      oss << " " << year << ".";
+    } else {
+      oss << ".";
+    }
+  } else {
+    // Just year if nothing else
+    std::string year = entry.value("year", "");
+    if (!year.empty())
+      oss << " " << year << ".";
+    else
+      oss << ".";
   }
-  // Year
-  std::string year = entry.value("year", "");
-  if (!year.empty())
-    oss << " (" << year << ")";
-  oss << ".";
-  return oss.str();
-}
-
-std::string
-ChicagoFormatter::format_long_footnote(const nlohmann::json &entry) const {
-  // Footnote (long): First Last, Title (Journal, Year), [pg].
-  std::ostringstream oss;
-  // Author(s) - try to rearrange "Last, First" to "First Last"
-  std::vector<std::string> formatted_names;
-  for (const auto &p : entry.value("author", nlohmann::json::array())) {
-    if (p.is_object() && p.contains("name")) {
-      std::string name = p["name"];
-      auto comma = name.find(',');
-      if (comma != std::string::npos) {
-        std::string last = name.substr(0, comma);
-        std::string first = name.substr(comma + 1);
-        while (!first.empty() && isspace(first[0]))
-          first.erase(0, 1);
-        formatted_names.push_back(first + " " + last);
-      } else {
-        formatted_names.push_back(name);
-      }
-    } else if (p.is_string()) {
-      std::string name = p;
-      auto comma = name.find(',');
-      if (comma != std::string::npos) {
-        std::string last = name.substr(0, comma);
-        std::string first = name.substr(comma + 1);
-        while (!first.empty() && isspace(first[0]))
-          first.erase(0, 1);
-        formatted_names.push_back(first + " " + last);
-      } else {
-        formatted_names.push_back(name);
+  
+  // DOI or URL
+  if (entry.contains("identifier") && entry["identifier"].is_array()) {
+    for (const auto &id : entry["identifier"]) {
+      if (id.contains("type") && id["type"] == "doi") {
+        std::string doi = get_str(id, "id");
+        if (!doi.empty())
+          oss << " https://doi.org/" << doi << ".";
+        break;
       }
     }
+  } else if (entry.contains("url")) {
+    std::string url = get_str(entry, "url");
+    if (!url.empty())
+      oss << " " << url << ".";
   }
-  // Join footnote author names
-  for (size_t i = 0; i < formatted_names.size(); ++i) {
-    if (i > 0)
-      oss << ", ";
-    oss << formatted_names[i];
-  }
-  // Title
-  std::string title = entry.value("title", "Untitled");
-  oss << ", " << html_italic(title);
-  // Journal, publisher, etc.
-  if (entry.contains("journal") && entry["journal"].is_object()) {
-    std::string journal = get_str(entry["journal"], "name");
-    std::string volume = get_str(entry["journal"], "volume");
-    std::string pages = get_str(entry["journal"], "pages");
-    oss << " (" << journal;
-    if (!volume.empty())
-      oss << " " << volume;
-    if (!pages.empty())
-      oss << ", " << pages;
-    oss << ")";
-  } else if (entry.contains("publisher")) {
-    oss << " (" << get_str(entry, "publisher") << ")";
-  }
-  // Year
-  std::string year = entry.value("year", "");
-  if (!year.empty())
-    oss << ", " << year;
-  // Page placeholder
-  oss << ", [pg].";
+  
   return oss.str();
 }
 
-std::string
-ChicagoFormatter::format_short_footnote(const nlohmann::json &entry) const {
-  // Short: Last, Short Title, [pg].
-  // Author last name
+// Long footnote (full citation, first use)
+std::string ChicagoFormatter::format_long_footnote(const nlohmann::json &entry) const {
+  std::ostringstream oss;
+  
+  // Author(s) in First Last format
+  bool has_author = entry.contains("author") && entry["author"].is_array() && 
+                    !entry["author"].empty();
+  bool has_editor = entry.contains("editor") && entry["editor"].is_array() && 
+                    !entry["editor"].empty();
+  
+  if (has_author) {
+    oss << join_names_footnote(entry["author"]);
+  } else if (has_editor) {
+    oss << join_names_footnote(entry["editor"]);
+    oss << (entry["editor"].size() > 1 ? ", eds." : ", ed.");
+  } else {
+    oss << "Unknown Author";
+  }
+  
+  oss << ", ";
+  
+  // Title
+  std::string title = entry.value("title", "Untitled");
+  std::string type = entry.value("type", "");
+  
+  if (type == "article" || type == "paper") {
+    oss << "\"" << title << ",\"";
+  } else {
+    oss << html_italic(title);
+  }
+  
+  // Container info
+  if (entry.contains("journal") && entry["journal"].is_object()) {
+    oss << " ";
+    std::string journal_name = get_str(entry["journal"], "name");
+    if (!journal_name.empty())
+      oss << html_italic(journal_name);
+    
+    std::string volume = get_str(entry["journal"], "volume");
+    std::string issue = get_str(entry["journal"], "number");
+    
+    if (!volume.empty()) {
+      oss << " " << volume;
+      if (!issue.empty())
+        oss << ", no. " << issue;
+    }
+    
+    std::string year = entry.value("year", "");
+    if (!year.empty())
+      oss << " (" << year << ")";
+    
+    oss << ": [pg].";
+  } else if (entry.contains("publisher")) {
+    std::string place = entry.value("place", "");
+    std::string publisher = get_str(entry, "publisher");
+    std::string year = entry.value("year", "");
+    
+    oss << " (";
+    if (!place.empty())
+      oss << place << ": ";
+    if (!publisher.empty())
+      oss << publisher;
+    if (!year.empty())
+      oss << ", " << year;
+    oss << "), [pg].";
+  } else {
+    std::string year = entry.value("year", "");
+    if (!year.empty())
+      oss << " (" << year << ")";
+    oss << ", [pg].";
+  }
+  
+  return oss.str();
+}
+
+// Short footnote (subsequent references)
+std::string ChicagoFormatter::format_short_footnote(const nlohmann::json &entry) const {
+  std::ostringstream oss;
+  
+  // Last name only
   std::string last = get_author_last_name(entry);
-  // Short title
+  oss << last << ", ";
+  
+  // Shortened title (first 4 words, no articles)
   std::string title = entry.value("title", "Untitled");
   std::istringstream iss(title);
-  std::string short_title, word;
+  std::string word, short_title;
   int count = 0;
+  
   while (iss >> word && count < 4) {
+    // Skip articles at the beginning
+    if (count == 0 && (word == "The" || word == "A" || word == "An"))
+      continue;
+    
     if (!short_title.empty())
       short_title += " ";
     short_title += word;
     count++;
   }
-  std::ostringstream oss;
-  oss << last << ", " << html_italic(short_title) << ", [pg].";
+  
+  std::string type = entry.value("type", "");
+  if (type == "article" || type == "paper") {
+    oss << "\"" << short_title << ",\"";
+  } else {
+    oss << html_italic(short_title);
+  }
+  
+  oss << " [pg].";
   return oss.str();
 }
