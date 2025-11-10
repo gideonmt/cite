@@ -9,101 +9,91 @@ on:
 jobs:
   build:
     runs-on: ${{ matrix.os }}
+    env:
+      BUILD_DIR: ${{ github.workspace }}/build
+      BUILD_TYPE: Release
 
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        build_type: [Release]
-        c_compiler: [gcc, clang, cl]
         include:
-          - os: windows-latest
-            c_compiler: cl
-            cpp_compiler: cl
-
           - os: ubuntu-latest
             c_compiler: gcc
             cpp_compiler: g++
-
           - os: ubuntu-latest
             c_compiler: clang
             cpp_compiler: clang++
-
           - os: macos-latest
             c_compiler: clang
             cpp_compiler: clang++
-        exclude:
           - os: windows-latest
-            c_compiler: gcc
-          - os: windows-latest
-            c_compiler: clang
-          - os: ubuntu-latest
-            c_compiler: cl
+            # on Windows we use MSVC/Visual Studio (do not override CMAKE_C/CXX_COMPILER)
+            arch: x64
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Set reusable strings
-      id: strings
-      shell: bash
-      run: |
-        echo "build-output-dir=${{ github.workspace }}/build" >> "$GITHUB_OUTPUT"
-
-    - name: Install nlohmann_json (Ubuntu)
+    - name: Install dependencies (Ubuntu)
       if: matrix.os == 'ubuntu-latest'
       run: |
         sudo apt-get update
-        sudo apt-get install -y nlohmann-json3-dev
+        # curl dev package is required so CMake's FindCURL can locate headers and libraries
+        sudo apt-get install -y libcurl4-openssl-dev nlohmann-json3-dev build-essential pkg-config
 
-    - name: Install nlohmann_json (macOS)
+    - name: Install dependencies (macOS)
       if: matrix.os == 'macos-latest'
       run: |
         brew update
-        brew install nlohmann-json
+        # install curl and nlohmann-json so CMake can find them
+        brew install curl nlohmann-json
 
-    - name: Install nlohmann_json (Windows via vcpkg)
+    - name: Install dependencies (Windows via vcpkg)
       if: matrix.os == 'windows-latest'
       shell: powershell
       run: |
+        # Clone and bootstrap vcpkg
         git clone https://github.com/microsoft/vcpkg.git "$env:RUNNER_TEMP\vcpkg"
         & "$env:RUNNER_TEMP\vcpkg\bootstrap-vcpkg.bat"
-        & "$env:RUNNER_TEMP\vcpkg\vcpkg.exe" install nlohmann-json:x64-windows
-        Add-Content -Path $env:GITHUB_ENV -Value "VCPKG_TOOLCHAIN_FILE=$env:RUNNER_TEMP\vcpkg\scripts\buildsystems\vcpkg.cmake"
+        # Install required libraries via vcpkg (nlohmann-json and curl). Use x64 triplet.
+        & "$env:RUNNER_TEMP\vcpkg\vcpkg.exe" install nlohmann-json:x64-windows curl[ssl]:x64-windows
+        # Expose the vcpkg toolchain file to subsequent CMake configure steps
+        Add-Content -Path $env:GITHUB_ENV -Value ("VCPKG_TOOLCHAIN_FILE=" + "$env:RUNNER_TEMP\vcpkg\scripts\buildsystems\vcpkg.cmake")
 
     - name: Configure CMake (Linux / macOS)
       if: matrix.os != 'windows-latest'
       run: |
-        cmake -B ${{ steps.strings.outputs.build-output-dir }} \
-          -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }} \
+        cmake -B "${{ env.BUILD_DIR }}" \
           -DCMAKE_C_COMPILER=${{ matrix.c_compiler }} \
-          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-          -S ${{ github.workspace }}
+          -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }} \
+          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+          -S "${{ github.workspace }}"
 
     - name: Configure CMake (Windows)
       if: matrix.os == 'windows-latest'
+      shell: powershell
       run: |
-        cmake -B ${{ steps.strings.outputs.build-output-dir }} \
-          -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }} \
-          -DCMAKE_C_COMPILER=${{ matrix.c_compiler }} \
-          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-          -DCMAKE_TOOLCHAIN_FILE=${{ env.VCPKG_TOOLCHAIN_FILE }} \
-          -S ${{ github.workspace }}
+        # Use the vcpkg toolchain file added to GITHUB_ENV in the vcpkg step.
+        # Use -A x64 to select the platform for Visual Studio multi-config generator on hosted runners.
+        cmake -B "${{ env.BUILD_DIR }}" `
+          -A x64 `
+          -DCMAKE_TOOLCHAIN_FILE="${{ env.VCPKG_TOOLCHAIN_FILE }}" `
+          -S "${{ github.workspace }}"
 
     - name: Build
-      run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ matrix.build_type }}
+      run: cmake --build "${{ env.BUILD_DIR }}" --config ${{ env.BUILD_TYPE }}
 
     - name: Test
-      working-directory: ${{ steps.strings.outputs.build-output-dir }}
-      run: ctest --build-config ${{ matrix.build_type }}
+      working-directory: ${{ env.BUILD_DIR }}
+      run: ctest -C ${{ env.BUILD_TYPE }} --output-on-failure
 
     - name: Upload build artifact (CI downloads)
       uses: actions/upload-artifact@v4
       with:
         name: ${{ matrix.os }}-binary
-        path: ${{ steps.strings.outputs.build-output-dir }}/
+        path: ${{ env.BUILD_DIR }}/
 
     - name: Upload binaries to GitHub Release (only when building a tag)
       uses: softprops/action-gh-release@v2
       if: startsWith(github.ref, 'refs/tags/')
       with:
-        files: ${{ steps.strings.outputs.build-output-dir }}/**
+        files: ${{ env.BUILD_DIR }}/**
