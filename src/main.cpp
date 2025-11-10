@@ -37,7 +37,6 @@ void print_usage() {
   std::cout << "  cite export my_papers.json chicago\n\n";
   std::cout << "  # Export to HTML file\n";
   std::cout << "  cite export my_papers.json chicago bibliography.html\n\n";
-  std::cout << "For more information, see readme.md\n\n";
 }
 
 void print_version() {
