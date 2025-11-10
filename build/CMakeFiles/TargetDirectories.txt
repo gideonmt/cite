@@ -1,0 +1,3 @@
+/Users/gideonmarcus-trask/Desktop/Programming/projects/cite/build/CMakeFiles/cite.dir
+/Users/gideonmarcus-trask/Desktop/Programming/projects/cite/build/CMakeFiles/edit_cache.dir
+/Users/gideonmarcus-trask/Desktop/Programming/projects/cite/build/CMakeFiles/rebuild_cache.dir
