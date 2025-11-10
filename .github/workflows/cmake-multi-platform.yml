@@ -42,26 +42,21 @@ jobs:
       if: matrix.os == 'ubuntu-latest'
       run: |
         sudo apt-get update
-        # curl dev package is required so CMake's FindCURL can locate headers and libraries
         sudo apt-get install -y libcurl4-openssl-dev nlohmann-json3-dev build-essential pkg-config
 
     - name: Install dependencies (macOS)
       if: matrix.os == 'macos-latest'
       run: |
         brew update
-        # install curl and nlohmann-json so CMake can find them
         brew install curl nlohmann-json
 
     - name: Install dependencies (Windows via vcpkg)
       if: matrix.os == 'windows-latest'
       shell: powershell
       run: |
-        # Clone and bootstrap vcpkg
         git clone https://github.com/microsoft/vcpkg.git "$env:RUNNER_TEMP\vcpkg"
         & "$env:RUNNER_TEMP\vcpkg\bootstrap-vcpkg.bat"
-        # Install required libraries via vcpkg (nlohmann-json and curl). Use x64 triplet.
         & "$env:RUNNER_TEMP\vcpkg\vcpkg.exe" install nlohmann-json:x64-windows curl[ssl]:x64-windows
-        # Expose the vcpkg toolchain file to subsequent CMake configure steps
         Add-Content -Path $env:GITHUB_ENV -Value ("VCPKG_TOOLCHAIN_FILE=" + "$env:RUNNER_TEMP\vcpkg\scripts\buildsystems\vcpkg.cmake")
 
     - name: Configure CMake (Linux / macOS)
@@ -77,8 +72,6 @@ jobs:
       if: matrix.os == 'windows-latest'
       shell: powershell
       run: |
-        # Use the vcpkg toolchain file added to GITHUB_ENV in the vcpkg step.
-        # Use -A x64 to select the platform for Visual Studio multi-config generator on hosted runners.
         cmake -B "${{ env.BUILD_DIR }}" `
           -A x64 `
           -DCMAKE_TOOLCHAIN_FILE="${{ env.VCPKG_TOOLCHAIN_FILE }}" `
@@ -90,15 +83,19 @@ jobs:
     - name: Test
       working-directory: ${{ env.BUILD_DIR }}
       run: ctest -C ${{ env.BUILD_TYPE }} --output-on-failure
-      
+
     - name: Upload build artifact (CI downloads)
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ matrix.os }}-${{ matrix.c_compiler }}-binary
-        path: ${{ env.BUILD_DIR }}/
+        name: ${{ matrix.os }}-${{ matrix.c_compiler || 'msvc' }}-binary
+        path: |
+          ${{ env.BUILD_DIR }}/cite*
+          ${{ env.BUILD_DIR }}/*.exe
 
-    - name: Upload binaries to GitHub Release (only when building a tag)
+    - name: Upload binary to GitHub Release (only when building a tag)
       uses: softprops/action-gh-release@v2
-      if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'ubuntu-latest'
+      if: startsWith(github.ref, 'refs/tags/')
       with:
-        files: ${{ env.BUILD_DIR }}/**
+        files: |
+          ${{ env.BUILD_DIR }}/cite
+          ${{ env.BUILD_DIR }}/cite.exe
