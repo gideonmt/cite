@@ -75,13 +75,13 @@ jobs:
       run: ctest --build-config ${{ matrix.build_type }}
 
     - name: Upload build artifact (CI downloads)
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: ${{ matrix.os }}-binary
         path: ${{ steps.strings.outputs.build-output-dir }}/
 
     - name: Upload binaries to GitHub Release (only when building a tag)
-      uses: softprops/action-gh-release@v4
+      uses: softprops/action-gh-release@v2
       if: startsWith(github.ref, 'refs/tags/')
       with:
         files: ${{ steps.strings.outputs.build-output-dir }}/**
