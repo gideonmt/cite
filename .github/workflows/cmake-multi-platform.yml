@@ -1,8 +1,13 @@
 name: CMake on multiple platforms
 
+permissions:
+  contents: write
+
 on:
   push:
     branches: [ "main" ]
+    tags:
+      - "v*"
   pull_request:
     branches: [ "main" ]
 
@@ -85,15 +90,15 @@ jobs:
     - name: Test
       working-directory: ${{ env.BUILD_DIR }}
       run: ctest -C ${{ env.BUILD_TYPE }} --output-on-failure
-
+      
     - name: Upload build artifact (CI downloads)
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ matrix.os }}-binary
+        name: ${{ matrix.os }}-${{ matrix.c_compiler }}-binary
         path: ${{ env.BUILD_DIR }}/
 
     - name: Upload binaries to GitHub Release (only when building a tag)
       uses: softprops/action-gh-release@v2
-      if: startsWith(github.ref, 'refs/tags/')
+      if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'ubuntu-latest'
       with:
         files: ${{ env.BUILD_DIR }}/**
